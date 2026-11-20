@@ -30,6 +30,7 @@ type ServerList map[Region][]Server
 type PIAClient struct {
 	region           string
 	wireguardServers ServerList
+	portForward      bool
 	username         string
 	password         string
 	verbose          bool
@@ -67,6 +68,13 @@ type AddKeyResult struct {
 	PeerIP     string   `json:"peer_ip"`
 	PeerPubkey string   `json:"peer_pubkey"`
 	DNSServers []string `json:"dns_servers"`
+
+	// Region and ServerName identify the Wireguard server the key was
+	// registered with; they are not part of the API response. ServerName is
+	// its TLS server name (CN), which PIA's port forwarding API on that
+	// server is verified against.
+	Region     string `json:"-"`
+	ServerName string `json:"-"`
 }
 
 type Server struct {
@@ -97,7 +105,19 @@ func NewPIAClient(username, password, region string, verbose bool) (*PIAClient, 
 		return nil, fmt.Errorf("region '%s' not found or has no online Wireguard servers. Use 'pia-wg-config regions' to see all available regions", region)
 	}
 
+	for _, r := range serverList.Regions {
+		if r.ID == region {
+			piaClient.portForward = r.PortForward
+			break
+		}
+	}
+
 	return &piaClient, nil
+}
+
+// SupportsPortForwarding reports whether the client's region supports port forwarding
+func (p *PIAClient) SupportsPortForwarding() bool {
+	return p.portForward
 }
 
 // tokenURL is PIA's central token API (the same endpoint used by PIA's
@@ -139,19 +159,25 @@ func (p *PIAClient) GetToken() (string, error) {
 	return tokenResp.Token, nil
 }
 
+// RegionInfo describes a region from PIA's server list
+type RegionInfo struct {
+	Name        string
+	PortForward bool
+}
+
 // GetAvailableRegions returns all online regions that have Wireguard servers
-func GetAvailableRegions() (map[Region]string, error) {
+func GetAvailableRegions() (map[Region]RegionInfo, error) {
 	serverList, err := getServerList()
 	if err != nil {
 		return nil, err
 	}
 
-	regions := make(map[Region]string)
+	regions := make(map[Region]RegionInfo)
 	for _, r := range serverList.Regions {
 		if r.Offline || len(r.Servers.Wg) == 0 {
 			continue
 		}
-		regions[Region(r.ID)] = r.Name
+		regions[Region(r.ID)] = RegionInfo{Name: r.Name, PortForward: r.PortForward}
 	}
 
 	return regions, nil
@@ -186,6 +212,8 @@ func (p *PIAClient) AddKey(token, publickey string) (AddKeyResult, error) {
 		addKeyResp.ServerPort <= 0 || addKeyResp.ServerPort > 65535 {
 		return addKeyResp, errors.New("add key response is missing server key, server IP, server port or peer IP")
 	}
+	addKeyResp.Region = p.region
+	addKeyResp.ServerName = server.Cn
 
 	return addKeyResp, nil
 }
@@ -197,6 +225,9 @@ func (p *PIAClient) getWireguardServerForRegion() Server {
 	servers := p.wireguardServers[Region(p.region)]
 	if len(servers) == 0 {
 		log.Fatalf("No Wireguard servers available for region: %s", p.region)
+	}
+	if p.verbose {
+		log.Printf("Using wireguard server %s (%s)", servers[0].Cn, servers[0].IP)
 	}
 	return servers[0]
 }
