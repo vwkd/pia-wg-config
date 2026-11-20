@@ -34,6 +34,7 @@ type templateConfig struct {
 	PrivateKey          string
 	PublicKey           string
 	PersistentKeepalive string
+	ServerCommonName    string
 }
 
 func NewPIAWgGenerator(pia PIAWgClient, config PIAWgGeneratorConfig) *PIAWgGenerator {
@@ -125,6 +126,7 @@ func (p *PIAWgGenerator) generateConfig(key AddKeyResult, privatekey string) (st
 		Address:             key.PeerIP,
 		AllowedIPs:          "0.0.0.0/0",
 		PersistentKeepalive: "25",
+		ServerCommonName:    key.ServerName,
 	}
 
 	var config bytes.Buffer
@@ -136,6 +138,9 @@ func (p *PIAWgGenerator) generateConfig(key AddKeyResult, privatekey string) (st
 	return config.String(), nil
 }
 
+// The server name is written as a comment: wg(8) and wg-quick(8) reject
+// unknown keys, while gluetun needs it as SERVER_NAMES for PIA port
+// forwarding.
 var wireguardConfigTemplate = `[Interface]
 PrivateKey = {{.PrivateKey}}
 Address = {{.Address}}
@@ -144,4 +149,7 @@ DNS = {{.DNS}}
 PublicKey = {{.PublicKey}}
 AllowedIPs = {{.AllowedIPs}}
 Endpoint = {{.Endpoint}}
-PersistentKeepalive = {{.PersistentKeepalive}}`
+PersistentKeepalive = {{.PersistentKeepalive}}
+{{- if .ServerCommonName}}
+# ServerCommonName = {{.ServerCommonName}}
+{{- end}}`
